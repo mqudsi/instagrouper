@@ -259,7 +259,7 @@ pub struct MediaInfo {
     pub duration: Duration,
     pub timestamp: Timestamp,
     pub resolution: Option<Resolution>,
-    pub bit_rate: u32,
+    pub bit_rate: Option<u32>,
 }
 
 impl MediaInfo {
@@ -315,8 +315,7 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     #[derive(Debug, Deserialize)]
     pub struct Stream {
         pub codec_type: String,
-        #[serde(rename = "codec_name")]
-        pub codec: String,
+        pub codec_name: String,
         pub width: Option<u16>,
         pub height: Option<u16>,
         pub bit_rate: Option<String>,
@@ -353,13 +352,13 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         size: ffprobe.format.size.parse().expect("Failed to parse size"),
         media: match ffprobe.streams[0].codec_type.as_str() {
             "audio" => MediaType::Audio,
-            "video" if matches!(ffprobe.streams[0].codec.as_str(), "png" | "mjpeg") => {
+            "video" if matches!(ffprobe.streams[0].codec_name.as_str(), "png" | "mjpeg") => {
                 MediaType::Image
             }
             "video" => MediaType::Video,
             other => panic!("Unexpected media type {other}"),
         },
-        codec: ffprobe.streams[0].codec.clone(),
+        codec: ffprobe.streams[0].codec_name.clone(),
         duration: ffprobe.streams[0]
             .duration
             .unwrap_or(ffprobe.format.duration),
@@ -367,20 +366,17 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
             .bit_rate
             .as_ref()
             .or(ffprobe.format.bit_rate.as_ref())
-            .map(|s| s.as_str())
-            .unwrap_or("0")
-            .parse()
-            .expect("Failed to parse bitrate"),
+            .map(|s| s.parse().expect("Failed to parse bitrate")),
         timestamp: match ffprobe.format.tags.and_then(|t| t.creation_time) {
             Some(ctime) => parser
                 .parse_timestamp(&ctime)
                 .expect("Failed to parse creation time"),
             None => path
                 .metadata()
-                .expect("Failed to load media metadata")
-                .created()
-                .map(|ct| ct.try_into().unwrap())
-                .unwrap_or(SystemTime::now().try_into().unwrap()),
+                .and_then(|md| md.created())
+                .unwrap_or_else(|_| SystemTime::now())
+                .try_into()
+                .expect("Failed to convert SystemTime to Timestamp!"),
         },
         resolution: None,
     };
