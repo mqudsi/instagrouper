@@ -1,0 +1,10 @@
+[package]
+name = "instagrouper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+jiff = "0.2.17"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
