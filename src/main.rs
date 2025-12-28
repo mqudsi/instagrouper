@@ -8,6 +8,7 @@ use size::Size;
 use std::fmt::Display;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::Uuid;
 
 macro_rules! exit {
@@ -91,7 +92,7 @@ fn main() {
                                 size_pretty: Size::from_bytes(group[0].size).to_string(),
                                 timestamp,
                                 path: std::fs::canonicalize(&group[0].path).unwrap(),
-                                duration: group[0].duration.into(),
+                                duration: Duration::ZERO.into(),
                                 kind: "image",
                                 sources,
                                 thumbnail: std::fs::canonicalize(&group[0].path).unwrap(),
