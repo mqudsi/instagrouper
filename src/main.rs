@@ -66,7 +66,12 @@ fn main() {
     for (n, group) in groups.iter().enumerate() {
         if group.len() == 1 && group[0].is_image() {
             results.push(Attachment {
-                name: group[0].path.file_name().unwrap().to_string_lossy().to_string(),
+                name: group[0]
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
                 size: group[0].size,
                 pretty_size: Size::from_bytes(group[0].size).to_string(),
                 path: group[0].path.clone(),

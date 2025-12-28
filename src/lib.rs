@@ -91,12 +91,10 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
         for (idx, group) in groups.iter().enumerate() {
             // If audio/image, group must not already have audio/image.
             // If video, group must not already have this resolution.
-            let already_has_resolution = group.iter().any(|other| {
-                match mi.media {
-                    MediaType::Audio => other.is_audio(),
-                    MediaType::Image => other.is_image(),
-                    MediaType::Video => other.resolution == mi.resolution,
-                }
+            let already_has_resolution = group.iter().any(|other| match mi.media {
+                MediaType::Audio => other.is_audio(),
+                MediaType::Image => other.is_image(),
+                MediaType::Video => other.resolution == mi.resolution,
             });
 
             if already_has_resolution {
@@ -143,7 +141,10 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
 
     let max_divergence = groups
         .iter()
-        .map(|g| g.first().unwrap().duration - g.last().unwrap().duration)
+        .map(|g| {
+            g.first().unwrap().duration
+                - g.iter().filter(|g| !g.is_image()).last().unwrap().duration
+        })
         .max()
         .unwrap();
 
@@ -156,7 +157,10 @@ pub fn merge(group: &[MediaInfo], out: &Path) -> Result<&'static str> {
     assert!(!group.is_empty());
 
     let audio = group.iter().filter(|mi| mi.is_audio()).next();
-    let video = group.iter().filter(|mi| mi.is_video()).max_by_key(|mi| mi.resolution);
+    let video = group
+        .iter()
+        .filter(|mi| mi.is_video())
+        .max_by_key(|mi| mi.resolution);
 
     let (Some(audio), Some(video)) = (audio, video) else {
         // Missing either audio or video
