@@ -8,4 +8,5 @@ anyhow = "1.0.100"
 jiff = { version = "0.2.17", features = [] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
+size = "0.5.0"
 uuid = { version = "1.19.0", features = ["v7"] }

@@ -2,12 +2,13 @@
 
 mod lib;
 
+use serde::Serialize;
+use size::Size;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use serde::Serialize;
 use uuid::Uuid;
 
 macro_rules! exit {
@@ -17,6 +18,10 @@ macro_rules! exit {
     }};
 }
 
+fn print_usage() {
+    eprintln!("instagroup [--out-dir OUTDIR] path1.mp4 path2.mp4 ...");
+}
+
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let mut paths = Vec::new();
@@ -24,7 +29,7 @@ fn main() {
 
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("-o" | "--outdir") => {
+            Some("-o" | "--outdir" | "--out-dir") => {
                 let temp = args.next().or_exit("Missing --outdir value!");
                 let path = PathBuf::from(temp);
                 if !path.exists() {
@@ -32,7 +37,11 @@ fn main() {
                 }
                 out_dir = path;
             }
-            Some(opt) if opt.starts_with("--") => exit!("Unrecognized option {opt}"),
+            Some("-h" | "--help") => {
+                print_usage();
+                std::process::exit(0);
+            }
+            Some(opt) if opt.starts_with("-") => exit!("Unrecognized option {opt}"),
             _ => {
                 if let Some(ext) = arg.as_bytes().last_chunk::<4>() {
                     if &ext.to_ascii_lowercase() == b".mp4" {
@@ -45,6 +54,11 @@ fn main() {
                 }
             }
         }
+    }
+
+    if paths.is_empty() {
+        print_usage();
+        exit!("");
     }
 
     let groups = lib::group(&paths).unwrap();
@@ -63,14 +77,18 @@ fn main() {
 
         let mp4name = format!("{stub}_{n:0>3}.mp4");
         let mp4path = out_dir.join(mp4name);
-        lib::merge(&group, Path::new(&mp4path)).unwrap();
+        let kind = lib::merge(&group, Path::new(&mp4path)).unwrap();
 
         let jpgname = format!("{stub}_{n:0>3}.jpg");
         let jpgpath = out_dir.join(jpgname);
         lib::thumbnail(&mp4path, &jpgpath).unwrap();
 
+        let size = mp4path.metadata().unwrap().len();
         results.push(Attachment {
             name: mp4path.file_name().unwrap().to_string_lossy().to_string(),
+            size,
+            pretty_size: Size::from_bytes(size).to_string(),
+            kind,
             path: std::fs::canonicalize(mp4path).unwrap(),
             thumbnail: jpgpath,
             duration: group[0].duration.into(),
@@ -90,6 +108,9 @@ fn main() {
 #[derive(Serialize)]
 struct Attachment {
     pub name: String,
+    pub size: u64,
+    pub pretty_size: String,
+    pub kind: &'static str,
     pub path: PathBuf,
     pub thumbnail: PathBuf,
     pub duration: lib::PrettyDuration,

@@ -141,7 +141,7 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
     Ok(groups)
 }
 
-pub fn merge(group: &[MediaInfo], out: &Path) -> Result<()> {
+pub fn merge(group: &[MediaInfo], out: &Path) -> Result<&'static str> {
     assert!(!group.is_empty());
 
     let audio = group.iter().filter(|mi| mi.is_audio()).next();
@@ -152,7 +152,7 @@ pub fn merge(group: &[MediaInfo], out: &Path) -> Result<()> {
         eprintln!("Copying source file as-is to {}", out.display());
         std::fs::copy(&group[0].path, out)
             .with_context(|| format!("Error writing to destination {}", out.display()))?;
-        return Ok(());
+        return Ok(if audio.is_some() { "audio" } else { "video" });
     };
 
     let ffmpeg = Command::new("ffmpeg")
@@ -180,7 +180,7 @@ pub fn merge(group: &[MediaInfo], out: &Path) -> Result<()> {
     let fname = out.file_name().unwrap();
     eprintln!("Merged audio and video into {}", fname.display());
 
-    Ok(())
+    Ok("audio+video")
 }
 
 pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
@@ -195,12 +195,20 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         return Ok(());
     }
 
+    let start = match mi.duration.as_secs() {
+        ..1 => "0",
+        ..6 => "2.0",
+        _ => "5.0",
+    };
+
     let ffmpeg = Command::new("ffmpeg")
         .arg("-hide_banner")
         .arg("-v")
         .arg("error")
         .arg("-i")
         .arg(&src)
+        .arg("-ss")
+        .arg(start)
         .arg("-frames:v")
         .arg("1")
         .arg("-c:v")
@@ -359,7 +367,11 @@ impl fmt::Display for PrettyDuration {
 
         if f.alternate() {
             // hh:mm:ss.mmm
-            write!(f, "{:02}:{:02}:{:02}.{:.3}", hours, minutes, seconds, millis)
+            write!(
+                f,
+                "{:02}:{:02}:{:02}.{:.3}",
+                hours, minutes, seconds, millis
+            )
         } else if hours > 0 {
             // hh:mm:ss
             write!(f, "{:02}:{:02}:{:02}", hours, minutes, seconds)
