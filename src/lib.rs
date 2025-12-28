@@ -135,15 +135,23 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
 
     let max_divergence = groups
         .iter()
-        .filter(|group| group.len() > 1)
         .map(|g| {
-            g.first().unwrap().duration
-                - g.iter().filter(|g| !g.is_image()).last().unwrap().duration
+            let mut candidates = g.iter().filter(|mi| !mi.is_image());
+            // Members are inserted by decreasing duration
+            let first = candidates.next();
+            let last = candidates.last();
+            if let (Some(first), Some(last)) = (first, last) {
+                first.duration - last.duration
+            } else {
+                // Less than two non-image files in group
+                Duration::ZERO
+            }
         })
-        .max()
-        .unwrap();
+        .max();
 
-    eprintln!("max duration divergence: {max_divergence:?}");
+    if let Some(max) = max_divergence {
+        eprintln!("max duration divergence: {max:?}");
+    }
 
     Ok(groups)
 }
