@@ -346,6 +346,11 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     let parser = jiff::fmt::temporal::DateTimeParser::new();
     let ffprobe: Ffprobe =
         serde_json::from_slice(&ffprobe.stdout).expect("Internal error decoding ffprobe output!");
+
+    if ffprobe.streams.is_empty() {
+        bail!("Empty media file provided (no streams)");
+    }
+
     let mut media_info = MediaInfo {
         path: path.to_owned(),
         stream_count: ffprobe.format.nb_streams,
@@ -365,7 +370,7 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         bit_rate: ffprobe.streams[0]
             .bit_rate
             .as_ref()
-            .or(ffprobe.format.bit_rate.as_ref())
+            .or_else(|| ffprobe.format.bit_rate.as_ref())
             .map(|s| s.parse().expect("Failed to parse bitrate")),
         timestamp: match ffprobe.format.tags.and_then(|t| t.creation_time) {
             Some(ctime) => parser
