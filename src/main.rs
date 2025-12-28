@@ -72,7 +72,7 @@ fn main() {
                     .to_string_lossy()
                     .to_string(),
                 size: group[0].size,
-                pretty_size: Size::from_bytes(group[0].size).to_string(),
+                size_pretty: Size::from_bytes(group[0].size).to_string(),
                 path: group[0].path.clone(),
                 duration: Duration::ZERO.into(),
                 kind: "image",
@@ -105,7 +105,7 @@ fn main() {
         results.push(Attachment {
             name: mp4path.file_name().unwrap().to_string_lossy().to_string(),
             size,
-            pretty_size: Size::from_bytes(size).to_string(),
+            size_pretty: Size::from_bytes(size).to_string(),
             kind,
             path: std::fs::canonicalize(mp4path).unwrap(),
             thumbnail: jpgpath,
@@ -127,7 +127,7 @@ fn main() {
 struct Attachment {
     pub name: String,
     pub size: u64,
-    pub pretty_size: String,
+    pub size_pretty: String,
     pub kind: &'static str,
     pub path: PathBuf,
     pub thumbnail: PathBuf,

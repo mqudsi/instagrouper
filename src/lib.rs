@@ -133,12 +133,6 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
         }
     }
 
-    eprintln!(
-        "Organized {} media into {} groups",
-        paths.len(),
-        groups.len()
-    );
-
     let max_divergence = groups
         .iter()
         .filter(|group| group.len() > 1)
