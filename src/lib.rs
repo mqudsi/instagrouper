@@ -237,7 +237,6 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         .with_context(|| format!("Error writing play overlay to {}", play_overlay.display()))?;
 
     defer! {
-        eprintln!("Deleting {}", play_overlay.display());
         if let Err(err) = std::fs::remove_file(&play_overlay) {
             eprintln!("Error cleaning up play overlay icon at {}: {err}", play_overlay.display());
         }
