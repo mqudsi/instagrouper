@@ -7,8 +7,7 @@ use serde::Serialize;
 use size::Size;
 use std::fmt::Display;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 macro_rules! exit {
@@ -61,60 +60,84 @@ fn main() {
         exit!("");
     }
 
+    // Group input files into groups matching a single original attachment
     let groups = lib::group(&paths).unwrap();
-    let mut results = Vec::with_capacity(groups.len());
-    for (n, group) in groups.iter().enumerate() {
-        assert!(!group.is_empty());
 
-        let timestamp = group.iter().map(|mi| mi.timestamp).min().unwrap();
-        let sources = group.iter().map(|mi| mi.path.clone()).collect();
-        let name0 = group[0].path.file_name().unwrap().to_string_lossy();
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let chunk_size = (groups.len() + num_cpus - 1) / num_cpus;
 
-        if group.len() == 1 && group[0].is_image() {
-            results.push(Attachment {
-                name: name0.to_string(),
-                size: group[0].size,
-                size_pretty: Size::from_bytes(group[0].size).to_string(),
-                timestamp,
-                path: std::fs::canonicalize(&group[0].path).unwrap(),
-                duration: Duration::ZERO.into(),
-                kind: "image",
-                sources,
-                thumbnail: std::fs::canonicalize(&group[0].path).unwrap(),
-            });
-            continue;
-        }
+    let results: Vec<Attachment> = std::thread::scope(|s| {
+        groups
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(chunk_idx, chunk)| {
+                let out_dir = out_dir.clone();
+                s.spawn(move || {
+                    let mut local_results = Vec::new();
+                    for (in_chunk_idx, group) in chunk.iter().enumerate() {
+                        assert!(!group.is_empty());
+                        let n = chunk_idx * chunk_size + in_chunk_idx;
 
-        // Take up to second _ in filename as prefix, if possible
-        let uuid;
-        let stub = if let Some(idx) = name0.match_indices('_').nth(1).map(|(i, _)| i) {
-            &name0[..idx]
-        } else {
-            uuid = Uuid::now_v7().to_string();
-            &uuid
-        };
+                        let timestamp = group.iter().map(|mi| mi.timestamp).min().unwrap();
+                        let sources = group.iter().map(|mi| mi.path.clone()).collect();
+                        let name0 = group[0].path.file_name().unwrap().to_string_lossy();
 
-        let mp4name = format!("{stub}_{n:0>3}.mp4");
-        let mp4path = out_dir.join(&mp4name);
-        let kind = lib::merge(&group, Path::new(&mp4path)).unwrap();
+                        if group.len() == 1 && group[0].is_image() {
+                            local_results.push(Attachment {
+                                name: name0.to_string(),
+                                size: group[0].size,
+                                size_pretty: Size::from_bytes(group[0].size).to_string(),
+                                timestamp,
+                                path: std::fs::canonicalize(&group[0].path).unwrap(),
+                                duration: group[0].duration.into(),
+                                kind: "image",
+                                sources,
+                                thumbnail: std::fs::canonicalize(&group[0].path).unwrap(),
+                            });
+                            continue;
+                        }
 
-        let jpgname = format!("{stub}_{n:0>3}.jpg");
-        let jpgpath = out_dir.join(jpgname);
-        lib::thumbnail(&mp4path, &jpgpath).unwrap();
+                        // Try to use up to second _ as a prefix, new uuid otherwise.
+                        let uuid;
+                        let stub =
+                            if let Some(idx) = name0.match_indices('_').nth(1).map(|(i, _)| i) {
+                                &name0[..idx]
+                            } else {
+                                uuid = Uuid::now_v7().to_string();
+                                &uuid
+                            };
 
-        let size = mp4path.metadata().unwrap().len();
-        results.push(Attachment {
-            name: mp4name,
-            path: std::fs::canonicalize(mp4path).unwrap(),
-            timestamp,
-            size,
-            size_pretty: Size::from_bytes(size).to_string(),
-            kind,
-            thumbnail: std::fs::canonicalize(&jpgpath).unwrap(),
-            duration: group[0].duration.into(),
-            sources,
-        })
-    }
+                        let mp4name = format!("{stub}_{n:0>3}.mp4");
+                        let mp4path = out_dir.join(&mp4name);
+                        let kind = lib::merge(&group, &mp4path).unwrap();
+
+                        let jpgname = format!("{stub}_{n:0>3}.jpg");
+                        let jpgpath = out_dir.join(jpgname);
+                        lib::thumbnail(&mp4path, &jpgpath).unwrap();
+
+                        let size = mp4path.metadata().unwrap().len();
+                        local_results.push(Attachment {
+                            name: mp4name,
+                            path: std::fs::canonicalize(mp4path).unwrap(),
+                            timestamp,
+                            size,
+                            size_pretty: Size::from_bytes(size).to_string(),
+                            kind,
+                            thumbnail: std::fs::canonicalize(&jpgpath).unwrap(),
+                            duration: group[0].duration.into(),
+                            sources,
+                        });
+                    }
+                    local_results
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect()
+    });
 
     eprintln!(
         "Merged {} files into {} attachments",
