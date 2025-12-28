@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -8,13 +9,13 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MediaType {
     Audio,
     Video,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Resolution {
     pub width: u16,
     pub height: u16,
@@ -31,7 +32,62 @@ impl Display for Resolution {
     }
 }
 
-#[derive(Debug)]
+/// Group paths into files belonging to the same attachment
+pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
+    let mut media_info = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let path = path.as_ref();
+        let mi = identify(path).with_context(|| format!("Error identifying {}", path.display()))?;
+        media_info.push(mi);
+    }
+
+    // Each attachment can only have one audio version, so start with that
+    let mut added = HashSet::with_capacity(media_info.len());
+    let mut groups = Vec::with_capacity(media_info.len());
+    for mi in media_info.iter().filter(|mi| mi.media == MediaType::Audio) {
+        groups.push(vec![mi]);
+        added.insert(mi);
+    }
+
+    while added.len() != media_info.len() {
+        for mi in &media_info {
+            if added.contains(mi) {
+                continue;
+            }
+            let candidate_groups = groups
+                .iter()
+                .filter(|g| !g.iter().any(|other| other.resolution == mi.resolution));
+            let best_group_idx = candidate_groups
+                .enumerate()
+                .min_by_key(|(_, g)| {
+                    g.iter()
+                        .map(|other| other.duration.abs_diff(mi.duration))
+                        .min()
+                        .unwrap()
+                })
+                .unwrap()
+                .0;
+            groups[best_group_idx].push(mi);
+            added.insert(mi);
+        }
+    }
+
+    eprintln!(
+        "Organized {} media into {} groups",
+        media_info.len(),
+        groups.len()
+    );
+
+    dbg!(&groups);
+
+    Ok(groups
+        .into_iter()
+        .map(|g| g.into_iter().cloned().collect())
+        .collect())
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct MediaInfo {
     pub stream_count: u8,
     pub media: MediaType,
@@ -44,7 +100,7 @@ pub struct MediaInfo {
     pub bit_rate: u32,
 }
 
-pub fn identify(path: &Path) -> Result<MediaInfo> {
+pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     #[derive(Debug, Deserialize)]
     pub struct Ffprobe {
         pub format: Format,

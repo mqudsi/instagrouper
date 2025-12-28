@@ -1,10 +1,9 @@
+#![allow(special_module_name)]
+
 mod lib;
 
-use lib::*;
-
-use jiff::Timestamp;
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 macro_rules! exit {
     ($($arg:tt)*) => {{
@@ -33,9 +32,7 @@ fn main() {
         }
     }
 
-    for path in &paths {
-        dbg!(lib::identify(path).unwrap());
-    }
+    lib::group(&paths).unwrap();
 }
 
 trait OrExit {
