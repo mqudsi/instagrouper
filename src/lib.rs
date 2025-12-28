@@ -276,6 +276,19 @@ impl MediaInfo {
     }
 }
 
+pub fn deserialize_duration<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: From<Duration>,
+{
+    let secs = String::deserialize(deserializer)?
+        .parse::<f64>()
+        .context("Error deserializing Duration from string")
+        .map_err(serde::de::Error::custom)?;
+
+    Ok(T::from(Duration::from_secs_f64(secs)))
+}
+
 pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     #[derive(Debug, Deserialize)]
     pub struct Ffprobe {
@@ -287,7 +300,9 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     pub struct Format {
         pub size: String,
         pub nb_streams: u8,
-        pub duration: Option<String>,
+        /// Defaults to [`Duration::ZERO`] if field isn't present
+        #[serde(default, deserialize_with = "deserialize_duration")]
+        pub duration: Duration,
         pub bit_rate: Option<String>,
         pub tags: Option<Tags>,
     }
@@ -305,7 +320,9 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         pub width: Option<u16>,
         pub height: Option<u16>,
         pub bit_rate: Option<String>,
-        pub duration: Option<String>,
+        /// Defaults to `None` if field isn't present
+        #[serde(default, deserialize_with = "deserialize_duration")]
+        pub duration: Option<Duration>,
     }
 
     let ffprobe = Command::new("ffprobe")
@@ -343,15 +360,9 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
             other => panic!("Unexpected media type {other}"),
         },
         codec: ffprobe.streams[0].codec.clone(),
-        duration: Duration::from_secs_f64(
-            ffprobe.streams[0]
-                .duration
-                .as_ref()
-                .map(|s| s.as_str())
-                .unwrap_or_else(|| "0")
-                .parse()
-                .unwrap(),
-        ),
+        duration: ffprobe.streams[0]
+            .duration
+            .unwrap_or(ffprobe.format.duration),
         bit_rate: ffprobe.streams[0]
             .bit_rate
             .as_ref()
