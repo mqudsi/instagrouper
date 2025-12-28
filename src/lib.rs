@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{self, Display};
 use std::fs::File;
@@ -6,8 +7,19 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
+use uuid::Uuid;
 
-use jiff::Timestamp;
+macro_rules! defer {
+    ($($body:tt)*) => {
+        let _guard = {
+            struct D<F: FnMut()>(F);
+            impl<F: FnMut()> Drop for D<F> {
+                fn drop(&mut self) { (self.0)(); }
+            }
+            D(|| { $($body)* })
+        };
+    };
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MediaType {
@@ -213,6 +225,24 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         return Ok(());
     }
 
+    let play_overlay = {
+        let mut path = std::env::temp_dir();
+        path.push(Uuid::now_v7().to_string());
+        path.set_extension("png");
+        path
+    };
+
+    File::create(&play_overlay)
+        .and_then(|mut f| f.write_all(play_overlay_webp()))
+        .with_context(|| format!("Error writing play overlay to {}", play_overlay.display()))?;
+
+    defer! {
+        eprintln!("Deleting {}", play_overlay.display());
+        if let Err(err) = std::fs::remove_file(&play_overlay) {
+            eprintln!("Error cleaning up play overlay icon at {}: {err}", play_overlay.display());
+        }
+    }
+
     let start = match mi.duration.as_secs() {
         ..1 => "0",
         ..6 => "2.0",
@@ -221,16 +251,43 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
 
     let ffmpeg = Command::new("ffmpeg")
         .arg("-hide_banner")
-        .arg("-v")
-        .arg("error")
-        .arg("-i")
-        .arg(&src)
+        // .arg("-v")
+        // .arg("error")
         .arg("-ss")
         .arg(start)
+        .arg("-i")
+        .arg(&src)
+        // Loop the image so it's always available at the same timestamp as the video
+        .arg("-loop")
+        .arg("1")
+        .arg("-i")
+        .arg(&play_overlay)
+        .arg("-filter_complex")
+        // // FFmpeg 7+ Logic:
+        // // [0:v]split[main][ref] -> Create two copies of the video.
+        // // [1:v][ref]scale=...[logo] -> Scale the logo (input 1) using the 'ref' copy for dimensions.
+        // //   'rw' and 'rh' are the Reference Width/Height of the 2nd input ([ref]).
+        // // [main][logo]overlay=... -> Overlay the scaled logo onto the 'main' video copy.
+        // .arg(
+        //     "[0:v]split[main][ref]; \
+        //   [1:v][ref]scale=w='min(rw,rh)*0.4':h=-1[logo]; \
+        //   [main][logo]overlay=(W-w)/2:(H-h)/2:shortest=1",
+        // )
+        // FFmpeg 6.0 and below logic (works on 7.0 but gives a deprecation warning):
+        // [1:v][0:v] takes (1) logo and (2) video.
+        // 'main_w' and 'main_h' refer to the second input ([0:v] / the video).
+        // It outputs two streams: [logo] (the scaled icon) and [video] (the original video).
+        // We then overlay [logo] on [video].
+        .arg(
+            "[1:v][0:v]scale2ref=w='min(main_w,main_h)*0.4':h='min(main_w,main_h)*0.4'[logo][video]; \
+              [video][logo]overlay=(W-w)/2:(H-h)/2:shortest=1",
+        )
         .arg("-frames:v")
         .arg("1")
         .arg("-c:v")
         .arg("mjpeg")
+        // .arg("-q:v")
+        // .arg("2")
         .arg("-f")
         .arg("image2")
         .arg(out)
@@ -241,6 +298,12 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         let mut stderr = std::io::stderr().lock();
         let _ = stderr.write_all(&ffmpeg.stderr);
         bail!("Error taking screenshot");
+    }
+
+    if !out.exists() {
+        std::io::stderr().lock().write_all(&ffmpeg.stderr).unwrap();
+        std::io::stdout().lock().write_all(&ffmpeg.stdout).unwrap();
+        bail!("Failed to generate screenshot with ffmpeg, refer to output.");
     }
 
     let fname = out.file_name().unwrap();
@@ -398,6 +461,10 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
 
 fn audio_only_png() -> &'static [u8] {
     include_bytes!("../media/audio-only.png")
+}
+
+fn play_overlay_webp() -> &'static [u8] {
+    include_bytes!("../media/play-overlay.webp")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
