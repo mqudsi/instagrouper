@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use jiff::Timestamp;
 
@@ -13,6 +13,7 @@ use jiff::Timestamp;
 pub enum MediaType {
     Audio,
     Video,
+    Image,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Ord, Copy)]
@@ -88,17 +89,27 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
         let mut best_match: Option<(usize, Duration)> = None; // (idx, Duration)
 
         for (idx, group) in groups.iter().enumerate() {
-            // If audio, group must not already have audio.
+            // If audio/image, group must not already have audio/image.
             // If video, group must not already have this resolution.
             let already_has_resolution = group.iter().any(|other| {
-                if mi.media == MediaType::Audio {
-                    other.media == MediaType::Audio
-                } else {
-                    other.resolution == mi.resolution && other.media == MediaType::Video
+                match mi.media {
+                    MediaType::Audio => other.is_audio(),
+                    MediaType::Image => other.is_image(),
+                    MediaType::Video => other.resolution == mi.resolution,
                 }
             });
 
             if already_has_resolution {
+                continue;
+            }
+
+            // Hack to skip thumbnails
+            if mi.is_image() {
+                if best_match.is_none() {
+                    if group.iter().any(|other| other.resolution == mi.resolution) {
+                        best_match = Some((idx, Default::default()));
+                    }
+                }
                 continue;
             }
 
@@ -145,7 +156,7 @@ pub fn merge(group: &[MediaInfo], out: &Path) -> Result<&'static str> {
     assert!(!group.is_empty());
 
     let audio = group.iter().filter(|mi| mi.is_audio()).next();
-    let video = group.iter().max_by_key(|mi| mi.resolution);
+    let video = group.iter().filter(|mi| mi.is_video()).max_by_key(|mi| mi.resolution);
 
     let (Some(audio), Some(video)) = (audio, video) else {
         // Missing either audio or video
@@ -237,7 +248,7 @@ pub struct MediaInfo {
     pub media: MediaType,
     pub path: PathBuf,
     pub codec: String,
-    pub size: usize,
+    pub size: u64,
     pub duration: Duration,
     pub timestamp: Timestamp,
     pub resolution: Option<Resolution>,
@@ -252,6 +263,10 @@ impl MediaInfo {
     pub fn is_video(&self) -> bool {
         self.media == MediaType::Video
     }
+
+    pub fn is_image(&self) -> bool {
+        self.media == MediaType::Image
+    }
 }
 
 pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
@@ -265,8 +280,8 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     pub struct Format {
         pub size: String,
         pub nb_streams: u8,
-        pub duration: String,
-        pub bit_rate: String,
+        pub duration: Option<String>,
+        pub bit_rate: Option<String>,
         pub tags: Option<Tags>,
     }
 
@@ -283,7 +298,7 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         pub width: Option<u16>,
         pub height: Option<u16>,
         pub bit_rate: Option<String>,
-        pub duration: String,
+        pub duration: Option<String>,
     }
 
     let ffprobe = Command::new("ffprobe")
@@ -314,15 +329,28 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         size: ffprobe.format.size.parse().expect("Failed to parse size"),
         media: match ffprobe.streams[0].codec_type.as_str() {
             "audio" => MediaType::Audio,
+            "video" if matches!(ffprobe.streams[0].codec.as_str(), "png" | "mjpeg") => {
+                MediaType::Image
+            }
             "video" => MediaType::Video,
             other => panic!("Unexpected media type {other}"),
         },
         codec: ffprobe.streams[0].codec.clone(),
-        duration: Duration::from_secs_f64(ffprobe.streams[0].duration.parse().unwrap()),
+        duration: Duration::from_secs_f64(
+            ffprobe.streams[0]
+                .duration
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or_else(|| "0")
+                .parse()
+                .unwrap(),
+        ),
         bit_rate: ffprobe.streams[0]
             .bit_rate
             .as_ref()
-            .unwrap_or(&ffprobe.format.bit_rate)
+            .or(ffprobe.format.bit_rate.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or("0")
             .parse()
             .expect("Failed to parse bitrate"),
         timestamp: match ffprobe.format.tags.and_then(|t| t.creation_time) {
@@ -333,13 +361,12 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
                 .metadata()
                 .expect("Failed to load media metadata")
                 .created()
-                .unwrap()
-                .try_into()
-                .unwrap(),
+                .map(|ct| ct.try_into().unwrap())
+                .unwrap_or(SystemTime::now().try_into().unwrap()),
         },
         resolution: None,
     };
-    if matches!(media_info.media, MediaType::Video) {
+    if matches!(media_info.media, MediaType::Video | MediaType::Image) {
         media_info.resolution = Resolution {
             width: ffprobe.streams[0].width.unwrap(),
             height: ffprobe.streams[0].height.unwrap(),

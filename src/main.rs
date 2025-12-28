@@ -44,7 +44,7 @@ fn main() {
             Some(opt) if opt.starts_with("-") => exit!("Unrecognized option {opt}"),
             _ => {
                 if let Some(ext) = arg.as_bytes().last_chunk::<4>() {
-                    if &ext.to_ascii_lowercase() == b".mp4" {
+                    if true || &ext.to_ascii_lowercase() == b".mp4" {
                         let path = PathBuf::from(arg);
                         if !path.exists() {
                             exit!("{}: Path not found", path.display());
@@ -64,6 +64,20 @@ fn main() {
     let groups = lib::group(&paths).unwrap();
     let mut results = Vec::with_capacity(groups.len());
     for (n, group) in groups.iter().enumerate() {
+        if group.len() == 1 && group[0].is_image() {
+            results.push(Attachment {
+                name: group[0].path.file_name().unwrap().to_string_lossy().to_string(),
+                size: group[0].size,
+                pretty_size: Size::from_bytes(group[0].size).to_string(),
+                path: group[0].path.clone(),
+                duration: Duration::ZERO.into(),
+                kind: "image",
+                sources: vec![group[0].path.clone()],
+                thumbnail: group[0].path.clone(),
+            });
+            continue;
+        }
+
         let fname = group[0].path.file_name().unwrap().to_string_lossy();
 
         // Take up to second _ in filename as prefix, if possible
