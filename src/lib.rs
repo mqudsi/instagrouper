@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
-use std::collections::HashSet;
-use std::fmt::Display;
+use serde::{Deserialize, Serialize, Serializer};
+use std::fmt::{self, Display};
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,10 +15,44 @@ pub enum MediaType {
     Video,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Ord, Copy)]
 pub struct Resolution {
     pub width: u16,
     pub height: u16,
+}
+
+impl PartialOrd for Resolution {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (self.width as usize * self.height as usize)
+            .partial_cmp(&(other.width as usize * other.height as usize))
+    }
+}
+
+#[test]
+fn resolution_cmp() {
+    assert!(
+        Resolution {
+            width: 720,
+            height: 400
+        }
+        .cmp(&Resolution {
+            width: 120,
+            height: 200
+        })
+        .is_gt()
+    );
+}
+
+#[test]
+fn resolution_opt_cmp() {
+    assert!(
+        Some(Resolution {
+            width: 720,
+            height: 400
+        })
+        .cmp(&None)
+        .is_gt()
+    );
 }
 
 impl Display for Resolution {
@@ -42,49 +76,151 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
         media_info.push(mi);
     }
 
-    // Each attachment can only have one audio version, so start with that
-    let mut added = HashSet::with_capacity(media_info.len());
-    let mut groups = Vec::with_capacity(media_info.len());
-    for mi in media_info.iter().filter(|mi| mi.media == MediaType::Audio) {
-        groups.push(vec![mi]);
-        added.insert(mi);
-    }
+    // Sort by duration to ensure we process similar files together first
+    media_info.sort_by_key(|mi| std::cmp::Reverse(mi.duration));
 
-    while added.len() != media_info.len() {
-        for mi in &media_info {
-            if added.contains(mi) {
+    let mut groups: Vec<Vec<MediaInfo>> = Vec::new();
+
+    // Max deviation allowed between two encodes of the same original media
+    let max_delta = Duration::from_secs_f64(0.7);
+
+    for mi in media_info {
+        let mut best_match: Option<(usize, Duration)> = None; // (idx, Duration)
+
+        for (idx, group) in groups.iter().enumerate() {
+            // If audio, group must not already have audio.
+            // If video, group must not already have this resolution.
+            let already_has_resolution = group.iter().any(|other| {
+                if mi.media == MediaType::Audio {
+                    other.media == MediaType::Audio
+                } else {
+                    other.resolution == mi.resolution && other.media == MediaType::Video
+                }
+            });
+
+            if already_has_resolution {
                 continue;
             }
-            let candidate_groups = groups
-                .iter()
-                .filter(|g| !g.iter().any(|other| other.resolution == mi.resolution));
-            let best_group_idx = candidate_groups
-                .enumerate()
-                .min_by_key(|(_, g)| {
-                    g.iter()
-                        .map(|other| other.duration.abs_diff(mi.duration))
-                        .min()
-                        .unwrap()
-                })
-                .unwrap()
-                .0;
-            groups[best_group_idx].push(mi);
-            added.insert(mi);
+
+            let delta = mi.duration.abs_diff(group[0].duration);
+            if delta <= max_delta {
+                // Take closest matching duration
+                match best_match {
+                    None => best_match = Some((idx, delta)),
+                    Some((_, best_delta)) => {
+                        if delta < best_delta {
+                            best_match = Some((idx, delta));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((idx, _)) = best_match {
+            groups[idx].push(mi);
+        } else {
+            // No compatible group found, create a new one
+            groups.push(vec![mi]);
         }
     }
 
     eprintln!(
         "Organized {} media into {} groups",
-        media_info.len(),
+        paths.len(),
         groups.len()
     );
 
-    dbg!(&groups);
+    let max_divergence = groups
+        .iter()
+        .map(|g| g.first().unwrap().duration - g.last().unwrap().duration)
+        .max()
+        .unwrap();
 
-    Ok(groups
-        .into_iter()
-        .map(|g| g.into_iter().cloned().collect())
-        .collect())
+    eprintln!("max duration divergence: {max_divergence:?}");
+
+    Ok(groups)
+}
+
+pub fn merge(group: &[MediaInfo], out: &Path) -> Result<()> {
+    assert!(!group.is_empty());
+
+    let audio = group.iter().filter(|mi| mi.is_audio()).next();
+    let video = group.iter().max_by_key(|mi| mi.resolution);
+
+    let (Some(audio), Some(video)) = (audio, video) else {
+        // Missing either audio or video
+        eprintln!("Copying source file as-is to {}", out.display());
+        std::fs::copy(&group[0].path, out)
+            .with_context(|| format!("Error writing to destination {}", out.display()))?;
+        return Ok(());
+    };
+
+    let ffmpeg = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(&audio.path)
+        .arg("-i")
+        .arg(&video.path)
+        .arg("-c")
+        .arg("copy")
+        .arg("-f")
+        .arg("mp4")
+        .arg(out)
+        .output()
+        .context("Error running ffmpeg!")?;
+
+    if !ffmpeg.status.success() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(&ffmpeg.stderr);
+        bail!("Error merging media");
+    }
+
+    let fname = out.file_name().unwrap();
+    eprintln!("Merged audio and video into {}", fname.display());
+
+    Ok(())
+}
+
+pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
+    let mi = identify(src).context("Error identifying file to screenshot")?;
+
+    if mi.is_audio() && mi.stream_count == 1 {
+        let mut file = File::create(out).with_context(|| {
+            format!("Error creating screenshot output file at {}", out.display())
+        })?;
+        file.write_all(audio_only_png())
+            .with_context(|| format!("Error writing screenshot to {}", out.display()))?;
+        return Ok(());
+    }
+
+    let ffmpeg = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-v")
+        .arg("error")
+        .arg("-i")
+        .arg(&src)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-c:v")
+        .arg("mjpeg")
+        .arg("-f")
+        .arg("image2")
+        .arg(out)
+        .output()
+        .context("Error running ffmpeg!")?;
+
+    if !ffmpeg.status.success() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(&ffmpeg.stderr);
+        bail!("Error taking screenshot");
+    }
+
+    let fname = out.file_name().unwrap();
+    eprintln!("Screenshot saved to {}", fname.display());
+
+    Ok(())
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -98,6 +234,16 @@ pub struct MediaInfo {
     pub timestamp: Timestamp,
     pub resolution: Option<Resolution>,
     pub bit_rate: u32,
+}
+
+impl MediaInfo {
+    pub fn is_audio(&self) -> bool {
+        self.media == MediaType::Audio
+    }
+
+    pub fn is_video(&self) -> bool {
+        self.media == MediaType::Video
+    }
 }
 
 pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
@@ -194,4 +340,48 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
     }
 
     Ok(media_info)
+}
+
+fn audio_only_png() -> &'static [u8] {
+    include_bytes!("../media/audio-only.png")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrettyDuration(pub Duration);
+
+impl fmt::Display for PrettyDuration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let total_secs = self.0.as_secs();
+        let hours = total_secs / 3600;
+        let minutes = (total_secs % 3600) / 60;
+        let seconds = total_secs % 60;
+        let millis = self.0.subsec_millis();
+
+        if f.alternate() {
+            // hh:mm:ss.mmm
+            write!(f, "{:02}:{:02}:{:02}.{:.3}", hours, minutes, seconds, millis)
+        } else if hours > 0 {
+            // hh:mm:ss
+            write!(f, "{:02}:{:02}:{:02}", hours, minutes, seconds)
+        } else {
+            // mm:ss
+            write!(f, "{:02}:{:02}", minutes, seconds)
+        }
+    }
+}
+
+impl Serialize for PrettyDuration {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = format!("{:#}", self);
+        serializer.serialize_str(&s)
+    }
+}
+
+impl From<Duration> for PrettyDuration {
+    fn from(value: Duration) -> Self {
+        Self(value)
+    }
 }
