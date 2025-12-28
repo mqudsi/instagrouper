@@ -141,6 +141,7 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
 
     let max_divergence = groups
         .iter()
+        .filter(|group| group.len() > 1)
         .map(|g| {
             g.first().unwrap().duration
                 - g.iter().filter(|g| !g.is_image()).last().unwrap().duration

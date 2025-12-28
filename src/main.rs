@@ -4,7 +4,6 @@ mod lib;
 
 use serde::Serialize;
 use size::Size;
-use std::ffi::OsString;
 use std::fmt::Display;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
