@@ -2,6 +2,7 @@
 
 mod lib;
 
+use jiff::Timestamp;
 use serde::Serialize;
 use size::Size;
 use std::fmt::Display;
@@ -29,7 +30,7 @@ fn main() {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("-o" | "--outdir" | "--out-dir") => {
-                let temp = args.next().or_exit("Missing --outdir value!");
+                let temp = args.next().or_exit("Missing --out-dir value!");
                 let path = PathBuf::from(temp);
                 if !path.exists() {
                     exit!("outdir not found!");
@@ -63,38 +64,38 @@ fn main() {
     let groups = lib::group(&paths).unwrap();
     let mut results = Vec::with_capacity(groups.len());
     for (n, group) in groups.iter().enumerate() {
+        assert!(!group.is_empty());
+
+        let timestamp = group.iter().map(|mi| mi.timestamp).min().unwrap();
+        let sources = group.iter().map(|mi| mi.path.clone()).collect();
+        let name0 = group[0].path.file_name().unwrap().to_string_lossy();
+
         if group.len() == 1 && group[0].is_image() {
             results.push(Attachment {
-                name: group[0]
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
+                name: name0.to_string(),
                 size: group[0].size,
                 size_pretty: Size::from_bytes(group[0].size).to_string(),
-                path: group[0].path.clone(),
+                timestamp,
+                path: std::fs::canonicalize(&group[0].path).unwrap(),
                 duration: Duration::ZERO.into(),
                 kind: "image",
-                sources: vec![group[0].path.clone()],
-                thumbnail: group[0].path.clone(),
+                sources,
+                thumbnail: std::fs::canonicalize(&group[0].path).unwrap(),
             });
             continue;
         }
 
-        let fname = group[0].path.file_name().unwrap().to_string_lossy();
-
         // Take up to second _ in filename as prefix, if possible
         let uuid;
-        let stub = if let Some(idx) = fname.match_indices('_').nth(1).map(|(i, _)| i) {
-            &fname[..idx]
+        let stub = if let Some(idx) = name0.match_indices('_').nth(1).map(|(i, _)| i) {
+            &name0[..idx]
         } else {
             uuid = Uuid::now_v7().to_string();
             &uuid
         };
 
         let mp4name = format!("{stub}_{n:0>3}.mp4");
-        let mp4path = out_dir.join(mp4name);
+        let mp4path = out_dir.join(&mp4name);
         let kind = lib::merge(&group, Path::new(&mp4path)).unwrap();
 
         let jpgname = format!("{stub}_{n:0>3}.jpg");
@@ -103,14 +104,15 @@ fn main() {
 
         let size = mp4path.metadata().unwrap().len();
         results.push(Attachment {
-            name: mp4path.file_name().unwrap().to_string_lossy().to_string(),
+            name: mp4name,
+            path: std::fs::canonicalize(mp4path).unwrap(),
+            timestamp,
             size,
             size_pretty: Size::from_bytes(size).to_string(),
             kind,
-            path: std::fs::canonicalize(mp4path).unwrap(),
-            thumbnail: jpgpath,
+            thumbnail: std::fs::canonicalize(&jpgpath).unwrap(),
             duration: group[0].duration.into(),
-            sources: group.iter().map(|mi| mi.path.clone()).collect(),
+            sources,
         })
     }
 
@@ -126,10 +128,11 @@ fn main() {
 #[derive(Serialize)]
 struct Attachment {
     pub name: String,
+    pub path: PathBuf,
+    pub timestamp: Timestamp,
     pub size: u64,
     pub size_pretty: String,
     pub kind: &'static str,
-    pub path: PathBuf,
     pub thumbnail: PathBuf,
     pub duration: lib::PrettyDuration,
     pub sources: Vec<PathBuf>,
