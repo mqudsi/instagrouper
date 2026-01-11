@@ -28,7 +28,7 @@ pub enum MediaType {
     Image,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Ord, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Resolution {
     pub width: u16,
     pub height: u16,
@@ -36,8 +36,14 @@ pub struct Resolution {
 
 impl PartialOrd for Resolution {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        (self.width as usize * self.height as usize)
-            .partial_cmp(&(other.width as usize * other.height as usize))
+        (self.width as u32 * self.height as u32)
+            .partial_cmp(&(other.width as u32 * other.height as u32))
+    }
+}
+
+impl Ord for Resolution {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.width as u32 * self.height as u32).cmp(&(other.width as u32 * other.height as u32))
     }
 }
 
