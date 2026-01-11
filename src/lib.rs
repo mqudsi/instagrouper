@@ -390,6 +390,7 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         #[serde(default, deserialize_with = "deserialize_duration")]
         pub duration: Duration,
         pub bit_rate: Option<String>,
+        #[serde(default)]
         pub tags: Option<Tags>,
     }
 
@@ -443,7 +444,12 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         size: ffprobe.format.size.parse().expect("Failed to parse size"),
         media: match ffprobe.streams[0].codec_type.as_str() {
             "audio" => MediaType::Audio,
-            "video" if matches!(ffprobe.streams[0].codec_name.as_str(), "png" | "mjpeg") => {
+            "video"
+                if matches!(
+                    ffprobe.streams[0].codec_name.as_str(),
+                    "png" | "mjpeg" | "webp"
+                ) =>
+            {
                 MediaType::Image
             }
             "video" => MediaType::Video,
