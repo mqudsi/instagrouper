@@ -19,7 +19,7 @@ macro_rules! exit {
 }
 
 fn print_usage() {
-    eprintln!("instagroup [--out-dir OUTDIR] path1.mp4 path2.mp4 ...");
+    eprintln!("instagrouper [--out-dir OUTDIR] path1.mp4 path2.mp4 ...");
 }
 
 fn main() {
