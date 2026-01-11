@@ -43,14 +43,14 @@ fn main() {
             }
             Some(opt) if opt.starts_with("-") => exit!("Unrecognized option {opt}"),
             _ => {
-                if let Some(ext) = arg.as_bytes().last_chunk::<4>() {
-                    if true || &ext.to_ascii_lowercase() == b".mp4" {
-                        let path = PathBuf::from(arg);
-                        if !path.exists() {
-                            exit!("{}: Path not found", path.display());
-                        }
-                        paths.push(path);
+                if let Some(ext) = arg.as_bytes().last_chunk::<4>()
+                    && (true || &ext.to_ascii_lowercase() == b".mp4")
+                {
+                    let path = PathBuf::from(arg);
+                    if !path.exists() {
+                        exit!("{}: Path not found", path.display());
                     }
+                    paths.push(path);
                 }
             }
         }
@@ -67,7 +67,7 @@ fn main() {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let chunk_size = (groups.len() + num_cpus - 1) / num_cpus;
+    let chunk_size = groups.len().div_ceil(num_cpus);
 
     let results: Vec<Attachment> = std::thread::scope(|s| {
         groups
@@ -112,7 +112,7 @@ fn main() {
 
                         let mp4name = format!("{stub}_{n:0>3}.mp4");
                         let mp4path = out_dir.join(&mp4name);
-                        let kind = lib::merge(&group, &mp4path).unwrap();
+                        let kind = lib::merge(group, &mp4path).unwrap();
 
                         let jpgname = format!("{stub}_{n:0>3}.jpg");
                         let jpgpath = out_dir.join(jpgname);

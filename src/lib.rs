@@ -115,10 +115,10 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
 
             // Hack to skip thumbnails
             if mi.is_image() {
-                if best_match.is_none() {
-                    if group.iter().any(|other| other.resolution == mi.resolution) {
-                        best_match = Some((idx, Default::default()));
-                    }
+                if best_match.is_none()
+                    && group.iter().any(|other| other.resolution == mi.resolution)
+                {
+                    best_match = Some((idx, Default::default()));
                 }
                 continue;
             }
@@ -171,7 +171,7 @@ pub fn group<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<Vec<MediaInfo>>> {
 pub fn merge(group: &[MediaInfo], out: &Path) -> Result<&'static str> {
     assert!(!group.is_empty());
 
-    let audio = group.iter().filter(|mi| mi.is_audio()).next();
+    let audio = group.iter().find(|mi| mi.is_audio());
     let video = group
         .iter()
         .filter(|mi| mi.is_video())
@@ -297,7 +297,7 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         .arg("-ss")
         .arg(start)
         .arg("-i")
-        .arg(&src)
+        .arg(src)
         // Loop the image so it's always available at the same timestamp as the video
         .arg("-loop")
         .arg("1")
@@ -375,7 +375,7 @@ where
     Ok(T::from(Duration::from_secs_f64(secs)))
 }
 
-pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
+pub fn identify(path: &Path) -> Result<MediaInfo> {
     #[derive(Debug, Deserialize)]
     pub struct Ffprobe {
         pub format: Format,
@@ -462,7 +462,7 @@ pub fn identify<'a>(path: &'a Path) -> Result<MediaInfo> {
         bit_rate: ffprobe.streams[0]
             .bit_rate
             .as_ref()
-            .or_else(|| ffprobe.format.bit_rate.as_ref())
+            .or(ffprobe.format.bit_rate.as_ref())
             .map(|s| s.parse().expect("Failed to parse bitrate")),
         timestamp: match ffprobe.format.tags.and_then(|t| t.creation_time) {
             Some(ctime) => parser
