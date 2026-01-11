@@ -248,6 +248,48 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         _ => "5.0",
     };
 
+    #[allow(unused)]
+    enum FfVersion {
+        /// For compatibility with FFmpeg 6.0 (and older versions we don't officially support)
+        ///
+        /// Runs on even the latest versions of FFmpeg, but generates a deprecation warning on
+        /// FFmpeg 7 or later.
+        Compat,
+        /// Only supports FFmpeg 7+
+        Ffmpeg7,
+    }
+
+    fn ffmpeg_vf(version: FfVersion) -> &'static str {
+        match version {
+            FfVersion::Compat => {
+                // [1:v][0:v] takes (1) logo and (2) video.
+                // 'main_w' and 'main_h' refer to the second input ([0:v] / the video).
+                // It outputs two streams: [logo] (the scaled icon) and [video] (the original
+                // video). We then overlay [logo] on [video].
+                //
+                // Unlike the FFmpeg 7 version, this does not correctly scale preserving aspect
+                // ratio if `h=-1` is used, so we're forced to calculate both and manually
+                // determine which length should be constrained to the maximum.
+                concat!(
+                    "[1:v][0:v]scale2ref=",
+                    "w='min(main_w,main_h)*0.4*main_w/max(main_w,main_h)':",
+                    "h='min(main_w,main_h)*0.4*main_h/max(main_w,main_h)'[logo][video]; ",
+                    "[video][logo]overlay=(W-w)/2:(H-h)/2:shortest=1"
+                )
+            }
+            FfVersion::Ffmpeg7 => {
+                // [0:v]split[main][ref] -> Create two copies of the video.
+                // [1:v][ref]scale=...[logo] -> Scale the logo (input 1) using the 'ref'
+                // copy for dimensions. 'rw' and 'rh' are the reference width/height
+                // of the 2nd input ([ref]).
+                // [main][logo]overlay=... -> Overlay the scaled logo onto the 'main' video copy.
+                "[0:v]split[main][ref]; \
+                  [1:v][ref]scale=w='min(rw,rh)*0.4':h=-1[logo]; \
+                  [main][logo]overlay=(W-w)/2:(H-h)/2:shortest=1"
+            }
+        }
+    }
+
     let ffmpeg = Command::new("ffmpeg")
         .arg("-hide_banner")
         // .arg("-v")
@@ -262,25 +304,7 @@ pub fn thumbnail(src: &Path, out: &Path) -> Result<()> {
         .arg("-i")
         .arg(&play_overlay)
         .arg("-filter_complex")
-        // // FFmpeg 7+ Logic:
-        // // [0:v]split[main][ref] -> Create two copies of the video.
-        // // [1:v][ref]scale=...[logo] -> Scale the logo (input 1) using the 'ref' copy for dimensions.
-        // //   'rw' and 'rh' are the Reference Width/Height of the 2nd input ([ref]).
-        // // [main][logo]overlay=... -> Overlay the scaled logo onto the 'main' video copy.
-        // .arg(
-        //     "[0:v]split[main][ref]; \
-        //   [1:v][ref]scale=w='min(rw,rh)*0.4':h=-1[logo]; \
-        //   [main][logo]overlay=(W-w)/2:(H-h)/2:shortest=1",
-        // )
-        // FFmpeg 6.0 and below logic (works on 7.0 but gives a deprecation warning):
-        // [1:v][0:v] takes (1) logo and (2) video.
-        // 'main_w' and 'main_h' refer to the second input ([0:v] / the video).
-        // It outputs two streams: [logo] (the scaled icon) and [video] (the original video).
-        // We then overlay [logo] on [video].
-        .arg(
-            "[1:v][0:v]scale2ref=w='min(main_w,main_h)*0.4':h='min(main_w,main_h)*0.4'[logo][video]; \
-              [video][logo]overlay=(W-w)/2:(H-h)/2:shortest=1",
-        )
+        .arg(ffmpeg_vf(FfVersion::Compat))
         .arg("-frames:v")
         .arg("1")
         .arg("-c:v")
