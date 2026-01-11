@@ -5,6 +5,7 @@ instagrouper — (video) media asset recombination and metadata generation utili
 
 ## SYNOPSIS
 **instagrouper** [**-o** *outdir* | **--out-dir** *outdir*] *file* ...
+
 **instagrouper** [**-h** | **--help**]
 
 ## DESCRIPTION
